@@ -1,0 +1,25 @@
+nBiuding=15;
+dp=zeros(2^nBiuding-1,nBiuding);
+dp(1,1)=1;
+v=zeros(nBiuding);
+for i=1:nBiuding
+    for j=1:nBiuding
+        v(i,j)=
+    end
+end
+
+for i=1:2^nBiuding-1
+    for j=1:nBiuding
+        if ~(bitand(bitshift(i,-j+1),1))
+            continue
+        end
+        for k=1:nBiuding
+            if (bitand(bitshift(i,-k+1),1)) || ~(gcd(j,k)==1)
+                continue
+            end
+            dp(i+bitshift(1,k-1),k)=dp(i+bitshift(1,k-1),k)+dp(i,j);
+        end   
+    end
+end
+nWay=sum(dp(end,:));
+

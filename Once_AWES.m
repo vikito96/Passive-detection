@@ -1,0 +1,267 @@
+%% 仿真信号输入
+clc
+clear
+close all
+
+Fs = 20000;              % sampling frequency (in Hz)
+T = 10;                  % time length (in s)
+L = T*Fs;                % signal length (number of samples)
+f0 = 0.01*Fs;            % cycle frequency (in Hz)
+t = 0:1/Fs:(T-1/Fs);
+
+%%%调制信号设定%%%
+Am1=1;
+fm1=5;
+Am2=1;
+fm2=10;
+Am3=1;
+fm3=15;
+Am4=1;
+fm4=20;
+ym1=Am1*cos(2*pi*fm1*t);
+ym2=Am2*cos(2*pi*fm2*t);
+ym3=Am3*cos(2*pi*fm3*t);
+ym4=Am4*cos(2*pi*fm4*t);
+%%%宽带载波设定%%%
+y_white=wgn(1,L,40000,'linear');
+fs=Fs/2;
+Wp=[2500 7500]/fs;
+Ws=[2000 8000]/fs;
+Rp=3;
+Rs=40;
+[n,Wn]=buttord(Wp,Ws,Rp,Rs);
+[b,a]=butter(n,Wn);
+yc=filter(b,a,y_white);
+%%%生成总体信号%%%
+y=(1+ym1+ym2+ym3+ym4).*yc;
+x=awgn(y,-18,'measured');%信噪比
+y=y(1:length(x));
+t=t(1:length(x));
+
+figure
+plot(t,x,'k')
+hold on
+plot(t,y,'r')
+title('Synthetic cyclostationary signal')
+xlabel('time (s)')
+ylabel('Magnitude[U]')
+legend('synthetic signal','SOI')
+set(gcf,'unit','centimeters','position',[10 5 9 4]); % 10cm*17.4cm
+Nw = 64;               % window length (number of samples),df ~ 1.5*Fs/Nw (in Hz)
+alpha_max =50;       % maximum cyclic frequency to scan (in Hz)
+ac=[fm1;fm2;fm3;fm4;25;30;35;40];%各个检测频带中心频率
+titlen={'WEES';'AWES'; 'EES'; 'Kurtogram Autogram' };
+%% 实验信号输入
+% clc
+% clear
+% close all
+% 
+% filename='Data_Chan1.txt';%读取原数据
+% A1=textread(filename);
+% A=A1';
+% L=20480*10;%da~Fs/L
+% Fs=20480;
+%     t=A(1,1+0.5*L:1.5*L);
+%     x1=A(2,1+0.5*L:1.5*L);
+%     x=x1-mean(x1);
+% % plot(t,x);
+% Nw = 64;               % window length (number of samples),df ~ 1.5*Fs/Nw (in Hz)
+% alpha_max =200;       % maximum cyclic frequency to scan (in Hz)
+% ac=[21;42;63;84;105;126;147];
+% titlen={'实验WEES';'实验AWES'; '实验EES'; '实验Kurtogram Autogram' };
+%% 商船信号输入
+% clc
+% clear
+% close all
+% 
+% % filename='商船,111转3叶.wav';%读取原数据
+% % ac=[1.85;3.7;5.55;7.4;9.25;11.1;12.95;14.8];
+% % filename='商船,83转4叶.wav';%读取原数据
+% % ac=[1.38;2.77;4.15;5.53;6.92;8.3;9.68;11.07];
+% filename='商船，72转5叶.wav';%读取原数据
+% ac=[1.2;2.4;3.6;4.8;6;7.2;8.4;9.6];
+% 
+% [data,Fs]=audioread(filename);
+% L=20*Fs;%da~Fs/L
+% x1=data(1+0.5*L:1.5*L);
+% x=x1-mean(x1);
+% % plot(x);
+% Nw = 64;               % window length (number of samples),df ~ 1.5*Fs/Nw (in Hz)
+% alpha_max =12;       % maximum cyclic frequency to scan (in Hz)
+% titlen={'5叶WEES';'5叶AWES'; '5叶EES'; '5叶Kurtogram Autogram' };
+%% 快速循环平稳分析
+                        % (should cover the cyclic frequency range of interest)
+opt.coh = 1;            % compute sepctral coherence? (yes=1, no=0)
+
+[S,alpha,f,Nv] = Fast_SC(x,Nw,alpha_max,Fs,opt);
+
+figure
+imagesc(alpha(2:end),f,abs(S(:,2:end)))%灰度图
+set(gca,'YDir','normal')
+colormap(flipud(gray));
+%% 加权函数处理
+SS=zeros(size(S));%自相关切片
+w=zeros(size(S,1),1);%自相关加权函数
+for i=1:length(f)
+slice=abs(S(i,1:end));
+sliceC=xcorr(slice);
+rn=(length(sliceC)+1)/2;
+sliceC=sliceC(rn:end);
+SS(i,:)=sliceC;
+rpeak=findpeaks(sliceC(2:end));
+rmax=max(rpeak);
+w(i)=(rmax/(sliceC(1)-rmax)).^2;
+end
+
+k(1,:)=w;%切片自相关加权函数（WEES）
+YY = fft(S');
+k(2,:) = kurtosis(abs(YY));%切片傅里叶峭度(AWES)
+
+k=k./repmat(max(k,[],2),1,length(k));%归一化
+Sk=zeros(size(k,1),length(alpha)-1);%加权EES
+for i=1:size(k,1)
+    kc=repmat(k(i,:)',1,size(S,2)-1);
+    if i==2
+        kcs=mean(abs((S(:,2:end).*kc).^2));
+    else
+        kcs=mean(abs(S(:,2:end).*kc));
+    end
+    Sk(i,:)=kcs;
+end
+Sk(i+1,:)=mean(abs(S(:,2:end)));%EES
+
+nlevel = 4;     % number of decomposition levels
+prewhiten = 1;
+if prewhiten == 1
+   x = x - mean(x);
+   Na = 100;
+   a = lpc(x,Na);
+   x = fftfilt(a,x);
+   x = x(Na+1:end);		% it is very important to remove the transient of the whitening filter, otherwise the SK will detect it!!
+end
+[~,~,~,~,~,~,bw,fc]= Fast_kurtogram2(x,nlevel,Fs);
+[~,f1]=min(abs(f-(fc-bw/2)));
+[~,f2]=min(abs(f-(fc+bw/2)));
+Sk(i+2,:)=mean(abs(S(f1:f2,2:end)));%快速峭度EES
+%% PSD
+% % 假设有一个长度为N的信号x，采样率为fs
+% % 设置参数
+% nPsd = 0.5*Fs; % FFT长度为2的幂次方，这里取N的最小幂次方
+% window = hann(nPsd); % 汉宁窗
+% noverlap = round(nPsd*0.75); % 重叠窗口长度为信号长度的一半
+% % 计算PSD谱
+% [Pxx,f] = pwelch(x, window, noverlap, nPsd, Fs);
+% % 绘制PSD谱
+% plot(f(1:100), Pxx(1:100)); % 将功率转换为dB单位并绘制PSD谱：
+% xlabel('Frequency (Hz)');
+% ylabel('Power/Frequency (dB/Hz)');
+
+%% 性能评价指标
+%主要经验参数
+Nthw =100;%平滑窗长
+Nthv = fix(0.75*Nthw);%重叠率
+level=0.90;%排序等级
+X=0.01;%带宽系数
+
+%排序法阈值曲线
+Nth=ceil(length(Sk)/(Nthw-Nthv));%窗口数量
+thi=zeros(size(Sk,1),Nth);%窗口阈值曲线
+ath=zeros(1,Nth);%窗口对应循环频率
+for i=1:Nth
+    N1=(Nthw-Nthv)*(i-1)+1;
+    N2=min(((Nthw-Nthv)*(i-1)+Nthw),length(Sk));
+    thic=sort(Sk(:,N1:N2),2);%升序重排列窗口
+    thin=round(level*(N2-N1+1));%窗口阈值索引
+    thi(:,i)=thic(:,thin);
+    ath(i)=alpha(ceil((N1+N2)/2));
+    if i==2
+        hit=thic;
+    end
+end
+scaH=max(hit,[],2);
+hit=hit./scaH;
+th= interp1(ath,thi',alpha(2:end),'pchip','extrap');%插值生成阈值曲线
+th=1*th';%添加系数
+
+%检测带宽
+B=zeros(2*length(ac),1);%检测带宽
+Bn=zeros(2*length(ac),1);%检测带宽序号
+m=zeros(size(Sk,1),length(ac));%检测带宽内峰值
+mn=zeros(size(Sk,1),length(ac));%检测带宽内峰值序号
+for bi=1:length(ac)
+    B(2*bi-1)=ac(bi)-X*ac(1);
+    B(2*bi)=ac(bi)+X*ac(1);
+    [~,Bn(2*bi-1)]=min(abs(alpha(2:end)-B(2*bi-1)));
+    [~,Bn(2*bi)]=min(abs(alpha(2:end)-B(2*bi)));
+    [m(:,bi),mn(:,bi)]=max(Sk(:,Bn(2*bi-1):Bn(2*bi)),[],2);
+    mn(:,bi)=mn(:,bi)+Bn(2*bi-1)-1;
+end
+col = mn';
+col=col(:);
+row=zeros(length(col),1);
+for i=1:size(Sk,1)
+    row(1+(i-1)*length(ac):i*length(ac)) = i.*ones(length(ac),1);
+end
+ind = sub2ind(size(th),row,col);
+thn=reshape(th(ind),length(ac),size(Sk,1))';%检测带宽峰值对应阈值
+
+pp=(m./thn)';%峰值和阈值比
+ppp=geomean(pp);%几何平均峰值比
+%% 画图
+%格式说明：
+
+B_p=zeros(2*length(ac),1);%画图显示检测带宽
+X_p=0.10;
+for bi=1:length(ac)
+    B_p(2*bi-1)=ac(bi)-X_p*ac(1);
+    B_p(2*bi)=ac(bi)+X_p*ac(1);
+end
+
+
+for i=1:size(Sk,1)
+    sca=max(Sk(i,:));
+    Sk(i,:)=Sk(i,:)./sca;
+    th(i,:)=th(i,:)./sca;
+    thi(i,:)=thi(i,:)./sca;
+    figure(i)
+    set(gcf,'unit','centimeters','position',[10 5 14 6]); % 10cm*17.4cm
+    %     set(gcf,'ToolBar','none','ReSize','off');   % 移除工具栏
+    set(gcf,'color','w'); % 背景设为白色
+    plot(alpha(2:end),Sk(i,:),'k','linewidth',1)%加权相干谱
+    hold on
+    set(gca,"YLim",[0 1*max(Sk(i,:))])
+    plot(alpha(2:end),th(i,:),'r-.','linewidth',1)%加权相干谱
+    plot(ath(1,2),thi(i,2),'rx','linewidth',1)
+    tP=[alpha(27);alpha(126)];
+%     plot([alpha(27) alpha(27)],[0,1],'r','linewidth',1)
+%     plot([alpha(126) alpha(126)],[0,1],'r','linewidth',1)
+    a=area(alpha(27:126),ones(1,100),'FaceColor',[1,0.8,0.8]);
+    uistack(a,'bottom');
+    %     title(titlen{i})
+    str1=['ATR=' num2str(ppp(i))];
+    %     legend(str1,'AutoUpdate','off')
+    %     legend('Box','off')
+%     text(0.75*alpha(end),1.1*max(Sk(i,:)),str1,'fontname','Arial Helvetica Times')
+    ylim=1*get(gca,'Ylim');
+    plot([B_p B_p],ylim,'b--','linewidth',1)
+    xlabel('Cyclic frequency \alpha[HZ]'),ylabel('Magnitude[U^2]')
+    set(gca,'fontname','Arial','FontSize',8)
+    set(gca,"YLim",[0.2 1*max(Sk(i,:))])
+    ax=gca;
+    ax.YAxis.Exponent = 0;
+%     exportgraphics(gca,[titlen{i} '.tiff'])
+end
+for i=1:size(Sk,1)
+    figure(i+4)
+    set(gcf,'unit','centimeters','position',[10 5 4 6]); % 10cm*17.4cm
+    [N,edges] = histcounts(hit(i,:),10);
+    re=(edges(2:end)+edges(1:end-1))/2;
+    plot(N,re,'k','linewidth',1);
+    set(gca,"YLim",[0.2 1])
+    xlim=1*get(gca,'Xlim');
+    xlim1=xlim(1):xlim(2);
+    hold on
+    plot(xlim1,thi(i,2)*ones(1,length(xlim1)),'r-.','linewidth',1)
+    xlabel('Number of points')
+    set(gca,'fontname','Arial','FontSize',8)
+end
